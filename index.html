@@ -161,7 +161,7 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
       return;
     }
     v.muted=muted;s.classList.remove("paused");
-    v.play().catch(()=>{v.muted=true;v.play().catch(()=>{})});
+    v.play().catch(()=>{setMuted(true);v.play().catch(()=>{})});
     s._w=setTimeout(()=>{watched.add(s.dataset.id);store.set([...watched])},1500);
     // last video of the list: add the list again so scrolling never ends
     if(s.dataset.last&&!s.dataset.done&&known.size){s.dataset.done=1;round()}
@@ -242,7 +242,7 @@ function pickMime(){
   return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"]
     .find(t=>MediaRecorder.isTypeSupported(t))||"";
 }
-async function compress(file,onP){
+async function compress(file,onP,q=1,cap=720){
   if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)throw new Error("unsupported");
   const url=URL.createObjectURL(file);
   const v=document.createElement("video");
@@ -256,12 +256,12 @@ async function compress(file,onP){
     await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=()=>no(new Error("decode"))});
     const dur=v.duration;
     if(!isFinite(dur)||dur<=0||!v.videoWidth)throw new Error("meta");
-    const sc=Math.min(1,720/Math.min(v.videoWidth,v.videoHeight));
+    const sc=Math.min(1,cap/Math.min(v.videoWidth,v.videoHeight));
     const w=Math.max(2,Math.round(v.videoWidth*sc/2)*2), h=Math.max(2,Math.round(v.videoHeight*sc/2)*2);
     const cv=document.createElement("canvas");cv.width=w;cv.height=h;
     const cx=cv.getContext("2d");
     const abr=64000;
-    const vbr=Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
+    const vbr=Math.max(80000,Math.floor(Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)))*q));   // aim for about 10 MB total (q lowers it on retries)
     const stream=cv.captureStream(30);
     try{
       ac=new (window.AudioContext||window.webkitAudioContext)();
@@ -296,7 +296,7 @@ async function compress(file,onP){
     await Promise.race([stopped,new Promise(r=>setTimeout(r,4000))]);   // never wait forever for the recorder
     const type=(rec.mimeType||mime||"video/mp4").split(";")[0];
     const blob=new Blob(chunks,{type});
-    if(!blob.size||blob.size>=file.size)return file;       // not smaller: keep original
+    if(!blob.size)throw new Error("empty");
     return new File([blob],"v."+(type.includes("mp4")?"mp4":"webm"),{type});
   }finally{cleanup()}
 }
@@ -316,13 +316,23 @@ const fileIn=document.getElementById("file");
 document.getElementById("add").onclick=()=>{menuEl.classList.remove("open");fileIn.click()};
 fileIn.onchange=async()=>{
   const f=fileIn.files[0];fileIn.value="";if(!f)return;
-  if(f.size>MAX_IN){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is 45 MB.",4000);return}
+  if(f.size>MAX_IN&&!confirm("Are you sure? The file is too big ("+Math.round(f.size/1048576)+" MB), quality will be bad."))return;
   const title=await askName();if(title===null)return;
   quietUntil=Date.now()+900000;
   let up=f;
   if(f.size>TARGET){
-    try{progress(0,"Shrinking video… 0%");up=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"))}
-    catch(e){up=f}      // could not shrink: upload the original (it is under 50 MB)
+    let best=null,q=1;
+    for(let i=0;i<4;i++){      // check the real size after shrinking; if still over 10 MB, shrink again harder
+      const tag=i?" (try "+(i+1)+")":"";
+      try{
+        progress(0,"Shrinking video… 0%"+tag);
+        const r=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"+tag),q,[720,540,432,360][i]);
+        if(!best||r.size<best.size)best=r;
+        if(r.size<=TARGET)break;
+        q*=TARGET/r.size*0.85;
+      }catch(e){break}
+    }
+    if(best&&best.size<f.size)up=best;      // could not shrink at all: upload the original
   }
   progress(0);
   try{
@@ -330,6 +340,7 @@ fileIn.onchange=async()=>{
     progress(100,"Processing…");
     watched.add(id);
     if(!ready){ready=true}
+    unlocked=true;      // uploaded video plays with sound when we scroll to it
     await refresh(false);
     const s=feed.querySelector('[data-id="'+id+'"]');
     if(s)s.scrollIntoView({behavior:"smooth"});
