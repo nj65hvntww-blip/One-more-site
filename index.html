@@ -26,7 +26,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 .fab{border:0;color:#fff;font-size:26px;width:52px;height:52px;border-radius:50%;background:rgba(20,18,32,.7);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 #dots{font-size:30px;line-height:1;padding-bottom:6px}
 #add{background:linear-gradient(135deg,#22d3a6,#3b82f6);font-size:32px;line-height:1}
-#snd{font-size:22px}
+#snd svg,#hint svg{display:block;margin:auto}
 .cap{position:absolute;left:16px;right:84px;bottom:calc(22px + env(safe-area-inset-bottom));font-size:17px;font-weight:700;line-height:1.25;text-shadow:0 1px 6px rgba(0,0,0,.85);pointer-events:none;word-break:break-word;text-align:left}
 #nm{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;padding:24px}
 #nm.on{display:flex}
@@ -37,6 +37,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 #nm button{flex:1;padding:12px;border:0;border-radius:12px;font-size:16px;font-weight:600;color:#fff;background:#3a3560}
 #nm #nmok{background:linear-gradient(135deg,#22d3a6,#3b82f6)}
 #nm #nmok:disabled{opacity:.4}
+#hint{position:fixed;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);display:none;align-items:center;gap:10px;background:rgba(0,0,0,.6);color:#fff;padding:12px 18px;border-radius:26px;font-weight:600;font-size:16px;pointer-events:none;white-space:nowrap}
+#hint.on{display:flex}
 #toast{position:fixed;z-index:6;left:50%;top:calc(16px + env(safe-area-inset-top));transform:translate(-50%,-90px);background:var(--ink);color:#111;padding:10px 16px;border-radius:20px;font-size:14px;font-weight:600;transition:transform .3s;max-width:80%;text-align:center;min-width:170px}
 #toast.on{transform:translate(-50%,0)}
 </style>
@@ -46,12 +48,13 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 <div id="menu">
   <button class="fab" id="dots" aria-label="Menu">⋯</button>
   <div id="opts">
-    <button class="fab" id="snd" aria-label="Sound">🔊</button>
+    <button class="fab" id="snd" aria-label="Sound"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z" fill="#fff"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
     <button class="fab" id="add" aria-label="Upload video">+</button>
   </div>
 </div>
 <input type="file" id="file" accept="video/*" hidden>
 <div id="toast"></div>
+<div id="hint"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z" fill="#fff"/><path d="M16 9l5 6M21 9l-5 6"/></svg><span>Tap anywhere for sound</span></div>
 <div id="nm"><div class="box"><h3>Name your video</h3>
   <input id="nmin" type="text" maxlength="60" placeholder="Video name" autocomplete="off">
   <div class="row"><button id="nmno">Cancel</button><button id="nmok" disabled>Upload</button></div></div></div>
@@ -59,7 +62,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 <script>
 /* ===== SETTINGS (GitHub Pages / any host) =====
    Paste your Supabase Project URL and anon public key here.
-   Example: const CFG = { url: "https://abcd.supabase.co", key: "eyJhbGciOi...", bucket: "videos" };
+   Example: const ICON_ON='<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z" fill="#fff"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>', ICON_OFF='<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z" fill="#fff"/><path d="M16 9l5 6M21 9l-5 6"/></svg>';
+const CFG = { url: "https://abcd.supabase.co", key: "eyJhbGciOi...", bucket: "videos" };
    Leave empty only if you run the home server (start.bat), which shares videos by itself. */
 const CFG = { url: "https://zyvidhjpslpgtkdvosya.supabase.co", key: "sb_publishable_2GIV2Wr_RrzQBwKU-x_lnA_bs_We8Nn", bucket: "videos" };
 
@@ -156,7 +160,7 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
     if(!v.src)v.src=s.dataset.src;
     v.muted=muted;s.classList.remove("paused");
     // browsers may block sound before the first tap: fall back to muted, unmute on first touch
-    v.play().catch(()=>{ if(!muted){v.muted=true;needUnmute=true;document.getElementById("snd").textContent="🔇";v.play().catch(()=>{})} });
+    v.play().catch(()=>{ if(!muted){v.muted=true;needUnmute=true;document.getElementById("snd").innerHTML=ICON_OFF;document.getElementById("hint").classList.add("on");v.play().catch(()=>{})} });
     s._w=setTimeout(()=>{watched.add(s.dataset.id);store.set([...watched])},1500);
     // last video of the list: add the list again so scrolling never ends
     if(s.dataset.last&&!s.dataset.done&&known.size){s.dataset.done=1;round()}
@@ -208,7 +212,7 @@ async function refresh(first){
       if(n&&Date.now()>quietUntil)toast(n===1?"New video is next ↓":n+" new videos are next ↓");
     }
   }catch(e){
-    if(first)showMsg("⚙️","Not connected [v7]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
+    if(first)showMsg("⚙️","Not connected [v8]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
   }
 }
 refresh(true);
@@ -218,11 +222,11 @@ document.addEventListener("visibilitychange",()=>{ if(!document.hidden)refresh(f
 /* ===== Controls ===== */
 const snd=document.getElementById("snd"), menuEl=document.getElementById("menu");
 function setMuted(m){
-  muted=m;snd.textContent=muted?"🔇":"🔊";
+  muted=m;snd.innerHTML=muted?ICON_OFF:ICON_ON;document.getElementById("hint").classList.remove("on");
   const v=cur&&cur.querySelector("video");if(v){v.muted=muted;v.play().catch(()=>{})}
 }
 // first touch anywhere turns the sound on if the browser blocked it at start
-document.addEventListener("pointerdown",e=>{
+document.addEventListener("click",e=>{
   if(!needUnmute||e.target.closest("#snd"))return;
   needUnmute=false;skipClick=!e.target.closest("#menu");setTimeout(()=>{skipClick=false},500);
   setMuted(false);
