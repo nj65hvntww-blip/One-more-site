@@ -161,7 +161,7 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
       return;
     }
     v.muted=muted;s.classList.remove("paused");
-    v.play().catch(()=>{setMuted(true);v.play().catch(()=>{})});
+    v.play().catch(()=>{v.muted=true;v.play().catch(()=>{})});
     s._w=setTimeout(()=>{watched.add(s.dataset.id);store.set([...watched])},1500);
     // last video of the list: add the list again so scrolling never ends
     if(s.dataset.last&&!s.dataset.done&&known.size){s.dataset.done=1;round()}
@@ -232,6 +232,7 @@ function setMuted(m){
   muted=m;snd.innerHTML=muted?ICON_OFF:ICON_ON;
   const v=cur&&cur.querySelector("video");if(v){v.muted=muted;if(!muted)v.volume=1}
 }
+setMuted(false);      // sound is ON when the app opens
 snd.onclick=()=>setMuted(!muted);
 document.getElementById("dots").onclick=()=>menuEl.classList.toggle("open");
 
@@ -316,7 +317,7 @@ const fileIn=document.getElementById("file");
 document.getElementById("add").onclick=()=>{menuEl.classList.remove("open");fileIn.click()};
 fileIn.onchange=async()=>{
   const f=fileIn.files[0];fileIn.value="";if(!f)return;
-  if(f.size>MAX_IN&&!confirm("Are you sure? The file is too big ("+Math.round(f.size/1048576)+" MB), quality will be bad."))return;
+  if(f.size>MAX_IN){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is 45 MB.",4000);return}
   const title=await askName();if(title===null)return;
   quietUntil=Date.now()+900000;
   let up=f;
