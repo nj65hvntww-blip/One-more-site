@@ -232,7 +232,6 @@ function setMuted(m){
   muted=m;snd.innerHTML=muted?ICON_OFF:ICON_ON;
   const v=cur&&cur.querySelector("video");if(v){v.muted=muted;if(!muted)v.volume=1}
 }
-setMuted(false);      // sound is ON when the app opens
 snd.onclick=()=>setMuted(!muted);
 document.getElementById("dots").onclick=()=>menuEl.classList.toggle("open");
 
@@ -331,7 +330,6 @@ fileIn.onchange=async()=>{
     progress(100,"Processing…");
     watched.add(id);
     if(!ready){ready=true}
-    unlocked=true;      // uploaded video plays with sound when we scroll to it
     await refresh(false);
     const s=feed.querySelector('[data-id="'+id+'"]');
     if(s)s.scrollIntoView({behavior:"smooth"});
