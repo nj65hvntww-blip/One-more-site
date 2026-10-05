@@ -25,8 +25,18 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 #menu.open #opts{display:flex}
 .fab{border:0;color:#fff;font-size:26px;width:52px;height:52px;border-radius:50%;background:rgba(20,18,32,.7);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
 #dots{font-size:30px;line-height:1;padding-bottom:6px}
-#add{background:var(--hot);font-size:32px;line-height:1}
+#add{background:linear-gradient(135deg,#22d3a6,#3b82f6);font-size:32px;line-height:1}
 #snd{font-size:22px}
+.cap{position:absolute;left:16px;right:84px;bottom:calc(22px + env(safe-area-inset-bottom));font-size:17px;font-weight:700;line-height:1.25;text-shadow:0 1px 6px rgba(0,0,0,.85);pointer-events:none;word-break:break-word;text-align:left}
+#nm{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;padding:24px}
+#nm.on{display:flex}
+#nm .box{width:100%;max-width:340px;background:#1b1830;border-radius:20px;padding:20px;display:flex;flex-direction:column;gap:14px}
+#nm h3{margin:0;font-size:18px}
+#nm input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #3a3560;background:#0d0b14;color:var(--ink);font-size:16px;-webkit-user-select:text;user-select:text;outline:0}
+#nm .row{display:flex;gap:10px}
+#nm button{flex:1;padding:12px;border:0;border-radius:12px;font-size:16px;font-weight:600;color:#fff;background:#3a3560}
+#nm #nmok{background:linear-gradient(135deg,#22d3a6,#3b82f6)}
+#nm #nmok:disabled{opacity:.4}
 #toast{position:fixed;z-index:6;left:50%;top:calc(16px + env(safe-area-inset-top));transform:translate(-50%,-90px);background:var(--ink);color:#111;padding:10px 16px;border-radius:20px;font-size:14px;font-weight:600;transition:transform .3s;max-width:80%;text-align:center;min-width:170px}
 #toast.on{transform:translate(-50%,0)}
 </style>
@@ -42,6 +52,9 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 </div>
 <input type="file" id="file" accept="video/*" hidden>
 <div id="toast"></div>
+<div id="nm"><div class="box"><h3>Name your video</h3>
+  <input id="nmin" type="text" maxlength="60" placeholder="Video name" autocomplete="off">
+  <div class="row"><button id="nmno">Cancel</button><button id="nmok" disabled>Upload</button></div></div></div>
 
 <script>
 /* ===== SETTINGS (GitHub Pages / any host) =====
@@ -74,6 +87,10 @@ let lt=0;document.addEventListener("touchend",e=>{const t=Date.now();if(t-lt<350
 document.addEventListener("touchmove",e=>{if(e.touches.length>1)e.preventDefault()},{passive:false});
 
 /* ===== Shared storage: Supabase (GitHub) or home server ===== */
+/* title <-> file name: "<time>-<rand>!<base64url title>.<ext>" (safe for any language) */
+const enc=t=>btoa(String.fromCharCode(...new TextEncoder().encode(t))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const dec=n=>{try{const b=n.replace(/\.[^.]+$/,"").split("!")[1];if(!b)return "";
+  const bin=atob(b.replace(/-/g,"+").replace(/_/g,"/"));return new TextDecoder().decode(Uint8Array.from(bin,c=>c.charCodeAt(0)))}catch(e){return ""}};
 const remote=!!(CFG.url&&CFG.key);
 const isJwt=CFG.key.startsWith("eyJ");   // new sb_publishable keys are not JWTs: send as apikey only
 const H=isJwt?{apikey:CFG.key,Authorization:"Bearer "+CFG.key}:{apikey:CFG.key};
@@ -84,16 +101,16 @@ const api={
         headers:{...H,"Content-Type":"application/json"},
         body:JSON.stringify({prefix:"",limit:200,sortBy:{column:"created_at",order:"desc"}})});
       if(!r.ok){let t="";try{t=(await r.text()).slice(0,120)}catch(e){}throw new Error("HTTP "+r.status+" "+t)}
-      return (await r.json()).filter(o=>o.name&&o.id).map(o=>({id:o.name,
+      return (await r.json()).filter(o=>o.name&&o.id).map(o=>({id:o.name,title:dec(o.name),
         src:`${CFG.url}/storage/v1/object/public/${CFG.bucket}/${encodeURIComponent(o.name)}`}));
     }
     const r=await fetch("/api/list",{cache:"no-store"});
     if(!r.ok||!(r.headers.get("content-type")||"").includes("json"))throw new Error("no server");
     return r.json();
   },
-  upload(file,onProgress){
+  upload(file,onProgress,title){
     const ext=(file.name.split(".").pop()||"mp4").toLowerCase().replace(/[^a-z0-9]/g,"")||"mp4";
-    const id=Date.now()+"-"+Math.random().toString(36).slice(2,8)+"."+ext;
+    const id=Date.now()+"-"+Math.random().toString(36).slice(2,8)+(title&&remote?"!"+enc(title):"")+"."+ext;
     return new Promise((res,rej)=>{
       const x=new XMLHttpRequest();
       if(remote){
@@ -151,7 +168,8 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
 
 function slide(v){
   const s=document.createElement("section");s.className="s";s.dataset.id=v.id;s.dataset.src=v.src;
-  s.innerHTML='<video playsinline webkit-playsinline loop preload="metadata" muted></video><div class="pp">▶</div>';
+  s.innerHTML='<video playsinline webkit-playsinline loop preload="metadata" muted></video><div class="pp">▶</div><div class="cap"></div>';
+  s.querySelector(".cap").textContent=v.title||"";
   const vid=s.querySelector("video");
   s.addEventListener("click",()=>{
     if(skipClick){skipClick=false;return}
@@ -190,7 +208,7 @@ async function refresh(first){
       if(n&&Date.now()>quietUntil)toast(n===1?"New video is next ↓":n+" new videos are next ↓");
     }
   }catch(e){
-    if(first)showMsg("⚙️","Not connected [v4]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
+    if(first)showMsg("⚙️","Not connected [v7]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
   }
 }
 refresh(true);
@@ -278,11 +296,23 @@ async function compress(file,onP){
   }finally{cleanup()}
 }
 
+function askName(){
+  return new Promise(res=>{
+    const m=document.getElementById("nm"),i=document.getElementById("nmin"),ok=document.getElementById("nmok"),no=document.getElementById("nmno");
+    i.value="";ok.disabled=true;m.classList.add("on");setTimeout(()=>i.focus(),80);
+    const close=v=>{m.classList.remove("on");i.oninput=i.onkeydown=ok.onclick=no.onclick=null;res(v)};
+    i.oninput=()=>{ok.disabled=!i.value.trim()};
+    i.onkeydown=e=>{if(e.key==="Enter")ok.click()};
+    ok.onclick=()=>{const t=i.value.trim();if(t)close(t.slice(0,60))};
+    no.onclick=()=>close(null);
+  });
+}
 const fileIn=document.getElementById("file");
 document.getElementById("add").onclick=()=>{menuEl.classList.remove("open");fileIn.click()};
 fileIn.onchange=async()=>{
   const f=fileIn.files[0];fileIn.value="";if(!f)return;
   if(f.size>MAX_IN){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is 45 MB.",4000);return}
+  const title=await askName();if(title===null)return;
   quietUntil=Date.now()+900000;
   let up=f;
   if(f.size>TARGET){
@@ -291,7 +321,7 @@ fileIn.onchange=async()=>{
   }
   progress(0);
   try{
-    const id=await api.upload(up,progress);
+    const id=await api.upload(up,progress,title);
     progress(100,"Processing…");
     watched.add(id);
     if(!ready){ready=true}
