@@ -253,11 +253,24 @@ async function compress(file,onP){
     const draw=()=>{cx.drawImage(v,0,0,w,h);onP(Math.min(99,Math.round(v.currentTime/dur*100)));raf=requestAnimationFrame(draw)};
     try{await v.play()}catch(e){v.muted=true;await v.play()}
     rec.start(500);draw();
-    const guard=setTimeout(()=>{if(rec.state!=="inactive")rec.stop()},dur*1500+15000);
-    await new Promise(r=>{v.onended=r});
-    clearTimeout(guard);
+    // wait for the end of the video; do not rely on the "ended" event alone (iOS can skip it)
+    let stalled=false;
+    await new Promise(res=>{
+      let last=-1,lastT=Date.now();
+      const iv=setInterval(()=>{
+        const t=v.currentTime;
+        if(v.ended||t>=dur-0.2){clearInterval(iv);res();return}
+        if(v.paused)v.play().catch(()=>{});
+        if(t!==last){last=t;lastT=Date.now()}
+        else if(Date.now()-lastT>8000){clearInterval(iv);if(t<dur-1.5)stalled=true;res()}
+      },250);
+      v.onended=()=>{clearInterval(iv);res()};
+    });
+    if(stalled)throw new Error("stalled");
+    cancelAnimationFrame(raf);
+    try{rec.requestData()}catch(e){}
     if(rec.state!=="inactive")rec.stop();
-    await stopped;
+    await Promise.race([stopped,new Promise(r=>setTimeout(r,4000))]);   // never wait forever for the recorder
     const type=(rec.mimeType||mime||"video/mp4").split(";")[0];
     const blob=new Blob(chunks,{type});
     if(!blob.size||blob.size>=file.size)return file;       // not smaller: keep original
