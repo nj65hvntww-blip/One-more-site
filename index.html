@@ -20,17 +20,26 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hi
 .s.paused .pp{display:flex}
 .msg{flex-direction:column;text-align:center;padding:32px;background:radial-gradient(circle at 50% 30%,#2a2160,var(--bg) 70%)}
 .msg h2{font-size:28px;margin:8px 0}.msg p{margin:0;opacity:.7;max-width:280px;line-height:1.4}
-.fab{position:fixed;z-index:5;border:0;color:#fff;font-size:26px;width:52px;height:52px;border-radius:50%;background:rgba(20,18,32,.7);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-#add{right:16px;bottom:calc(24px + env(safe-area-inset-bottom));background:var(--hot);font-size:32px;line-height:1}
-#snd{right:16px;top:calc(14px + env(safe-area-inset-top));font-size:22px}
+#menu{position:fixed;z-index:5;right:16px;top:calc(14px + env(safe-area-inset-top));display:flex;flex-direction:column;align-items:center;gap:12px}
+#opts{display:none;flex-direction:column;gap:12px}
+#menu.open #opts{display:flex}
+.fab{border:0;color:#fff;font-size:26px;width:52px;height:52px;border-radius:50%;background:rgba(20,18,32,.7);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+#dots{font-size:30px;line-height:1;padding-bottom:6px}
+#add{background:var(--hot);font-size:32px;line-height:1}
+#snd{font-size:22px}
 #toast{position:fixed;z-index:6;left:50%;top:calc(16px + env(safe-area-inset-top));transform:translate(-50%,-90px);background:var(--ink);color:#111;padding:10px 16px;border-radius:20px;font-size:14px;font-weight:600;transition:transform .3s;max-width:80%;text-align:center;min-width:170px}
 #toast.on{transform:translate(-50%,0)}
 </style>
 </head>
 <body>
 <div id="feed"></div>
-<button class="fab" id="snd" aria-label="Sound">🔇</button>
-<button class="fab" id="add" aria-label="Upload video">+</button>
+<div id="menu">
+  <button class="fab" id="dots" aria-label="Menu">⋯</button>
+  <div id="opts">
+    <button class="fab" id="snd" aria-label="Sound">🔊</button>
+    <button class="fab" id="add" aria-label="Upload video">+</button>
+  </div>
+</div>
 <input type="file" id="file" accept="video/*" hidden>
 <div id="toast"></div>
 
@@ -114,7 +123,7 @@ const store={
   set(a){try{localStorage.setItem("watched",JSON.stringify(a))}catch(e){}}
 };
 const watched=new Set(store.get());
-let muted=true, cur=null, ready=false, quietUntil=0;
+let muted=false, needUnmute=false, skipClick=false, cur=null, ready=false, quietUntil=0;
 const progress=(p,label)=>{
   toastEl.textContent=label||("Uploading "+p+"/100%");
   toastEl.classList.add("on");
@@ -129,7 +138,8 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
     cur=s;
     if(!v.src)v.src=s.dataset.src;
     v.muted=muted;s.classList.remove("paused");
-    v.play().catch(()=>{});
+    // browsers may block sound before the first tap: fall back to muted, unmute on first touch
+    v.play().catch(()=>{ if(!muted){v.muted=true;needUnmute=true;document.getElementById("snd").textContent="🔇";v.play().catch(()=>{})} });
     s._w=setTimeout(()=>{watched.add(s.dataset.id);store.set([...watched])},1500);
     // last video of the list: add the list again so scrolling never ends
     if(s.dataset.last&&!s.dataset.done&&known.size){s.dataset.done=1;round()}
@@ -143,7 +153,10 @@ function slide(v){
   const s=document.createElement("section");s.className="s";s.dataset.id=v.id;s.dataset.src=v.src;
   s.innerHTML='<video playsinline webkit-playsinline loop preload="metadata" muted></video><div class="pp">▶</div>';
   const vid=s.querySelector("video");
-  s.addEventListener("click",()=>{ if(vid.paused){vid.play();s.classList.remove("paused")}else{vid.pause();s.classList.add("paused")} });
+  s.addEventListener("click",()=>{
+    if(skipClick){skipClick=false;return}
+    const m=document.getElementById("menu");if(m.classList.contains("open")){m.classList.remove("open");return}
+    if(vid.paused){vid.play();s.classList.remove("paused")}else{vid.pause();s.classList.add("paused")} });
   io.observe(s);return s;
 }
 function round(){
@@ -177,7 +190,7 @@ async function refresh(first){
       if(n&&Date.now()>quietUntil)toast(n===1?"New video is next ↓":n+" new videos are next ↓");
     }
   }catch(e){
-    if(first)showMsg("⚙️","Not connected [v3]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
+    if(first)showMsg("⚙️","Not connected [v4]",remote?"Supabase said: "+(e&&e.message||e)+" — check URL, key, public bucket.":"Add your Supabase URL and key in index.html (CFG), or open this page from the home server.");
   }
 }
 refresh(true);
@@ -185,18 +198,87 @@ setInterval(()=>refresh(false),3000);                      // new videos from ot
 document.addEventListener("visibilitychange",()=>{ if(!document.hidden)refresh(false) });
 
 /* ===== Controls ===== */
-document.getElementById("snd").onclick=e=>{
-  muted=!muted;e.currentTarget.textContent=muted?"🔇":"🔊";
+const snd=document.getElementById("snd"), menuEl=document.getElementById("menu");
+function setMuted(m){
+  muted=m;snd.textContent=muted?"🔇":"🔊";
   const v=cur&&cur.querySelector("video");if(v){v.muted=muted;v.play().catch(()=>{})}
-};
+}
+// first touch anywhere turns the sound on if the browser blocked it at start
+document.addEventListener("pointerdown",e=>{
+  if(!needUnmute||e.target.closest("#snd"))return;
+  needUnmute=false;skipClick=!e.target.closest("#menu");setTimeout(()=>{skipClick=false},500);
+  setMuted(false);
+},true);
+snd.onclick=()=>{ if(needUnmute){needUnmute=false;setMuted(false)}else setMuted(!muted) };
+document.getElementById("dots").onclick=()=>menuEl.classList.toggle("open");
+
+/* ===== Shrink video on the phone before upload: pick up to 45 MB, upload about 10 MB ===== */
+const MAX_IN=45*1024*1024, TARGET=10*1024*1024;
+function pickMime(){
+  if(!window.MediaRecorder)return "";
+  return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"]
+    .find(t=>MediaRecorder.isTypeSupported(t))||"";
+}
+async function compress(file,onP){
+  if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)throw new Error("unsupported");
+  const url=URL.createObjectURL(file);
+  const v=document.createElement("video");
+  v.playsInline=true;v.setAttribute("playsinline","");v.preload="auto";
+  v.style.cssText="position:fixed;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none";
+  document.body.appendChild(v);
+  let ac=null,raf=0,rec=null;
+  const cleanup=()=>{cancelAnimationFrame(raf);try{v.pause()}catch(e){}v.remove();URL.revokeObjectURL(url);try{ac&&ac.close()}catch(e){}};
+  try{
+    v.src=url;
+    await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=()=>no(new Error("decode"))});
+    const dur=v.duration;
+    if(!isFinite(dur)||dur<=0||!v.videoWidth)throw new Error("meta");
+    const sc=Math.min(1,720/Math.min(v.videoWidth,v.videoHeight));
+    const w=Math.max(2,Math.round(v.videoWidth*sc/2)*2), h=Math.max(2,Math.round(v.videoHeight*sc/2)*2);
+    const cv=document.createElement("canvas");cv.width=w;cv.height=h;
+    const cx=cv.getContext("2d");
+    const abr=64000;
+    const vbr=Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
+    const stream=cv.captureStream(30);
+    try{
+      ac=new (window.AudioContext||window.webkitAudioContext)();
+      const src=ac.createMediaElementSource(v), dst=ac.createMediaStreamDestination();
+      src.connect(dst);dst.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+      if(ac.state==="suspended")ac.resume();
+    }catch(e){}
+    const mime=pickMime();
+    rec=new MediaRecorder(stream,Object.assign({videoBitsPerSecond:vbr,audioBitsPerSecond:abr},mime?{mimeType:mime}:{}));
+    const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+    const stopped=new Promise(r=>{rec.onstop=r});
+    const draw=()=>{cx.drawImage(v,0,0,w,h);onP(Math.min(99,Math.round(v.currentTime/dur*100)));raf=requestAnimationFrame(draw)};
+    try{await v.play()}catch(e){v.muted=true;await v.play()}
+    rec.start(500);draw();
+    const guard=setTimeout(()=>{if(rec.state!=="inactive")rec.stop()},dur*1500+15000);
+    await new Promise(r=>{v.onended=r});
+    clearTimeout(guard);
+    if(rec.state!=="inactive")rec.stop();
+    await stopped;
+    const type=(rec.mimeType||mime||"video/mp4").split(";")[0];
+    const blob=new Blob(chunks,{type});
+    if(!blob.size||blob.size>=file.size)return file;       // not smaller: keep original
+    return new File([blob],"v."+(type.includes("mp4")?"mp4":"webm"),{type});
+  }finally{cleanup()}
+}
+
 const fileIn=document.getElementById("file");
-document.getElementById("add").onclick=()=>fileIn.click();
+document.getElementById("add").onclick=()=>{menuEl.classList.remove("open");fileIn.click()};
 fileIn.onchange=async()=>{
   const f=fileIn.files[0];fileIn.value="";if(!f)return;
+  if(f.size>MAX_IN){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is 45 MB.",4000);return}
+  quietUntil=Date.now()+900000;
+  let up=f;
+  if(f.size>TARGET){
+    try{progress(0,"Shrinking video… 0%");up=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"))}
+    catch(e){up=f}      // could not shrink: upload the original (it is under 50 MB)
+  }
   progress(0);
-  quietUntil=Date.now()+60000;
   try{
-    const id=await api.upload(f,progress);
+    const id=await api.upload(up,progress);
     progress(100,"Processing…");
     watched.add(id);
     if(!ready){ready=true}
