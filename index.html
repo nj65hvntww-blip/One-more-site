@@ -243,7 +243,7 @@ function pickMime(){
   return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"]
     .find(t=>MediaRecorder.isTypeSupported(t))||"";
 }
-async function compress(file,onP,q=1,cap=720){
+async function compress(file,onP){
   if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)throw new Error("unsupported");
   const url=URL.createObjectURL(file);
   const v=document.createElement("video");
@@ -257,12 +257,12 @@ async function compress(file,onP,q=1,cap=720){
     await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=()=>no(new Error("decode"))});
     const dur=v.duration;
     if(!isFinite(dur)||dur<=0||!v.videoWidth)throw new Error("meta");
-    const sc=Math.min(1,cap/Math.min(v.videoWidth,v.videoHeight));
+    const sc=Math.min(1,720/Math.min(v.videoWidth,v.videoHeight));
     const w=Math.max(2,Math.round(v.videoWidth*sc/2)*2), h=Math.max(2,Math.round(v.videoHeight*sc/2)*2);
     const cv=document.createElement("canvas");cv.width=w;cv.height=h;
     const cx=cv.getContext("2d");
     const abr=64000;
-    const vbr=Math.max(80000,Math.floor(Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)))*q));   // aim for about 10 MB total (q lowers it on retries)
+    const vbr=Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
     const stream=cv.captureStream(30);
     try{
       ac=new (window.AudioContext||window.webkitAudioContext)();
@@ -297,7 +297,7 @@ async function compress(file,onP,q=1,cap=720){
     await Promise.race([stopped,new Promise(r=>setTimeout(r,4000))]);   // never wait forever for the recorder
     const type=(rec.mimeType||mime||"video/mp4").split(";")[0];
     const blob=new Blob(chunks,{type});
-    if(!blob.size)throw new Error("empty");
+    if(!blob.size||blob.size>=file.size)return file;       // not smaller: keep original
     return new File([blob],"v."+(type.includes("mp4")?"mp4":"webm"),{type});
   }finally{cleanup()}
 }
@@ -322,18 +322,8 @@ fileIn.onchange=async()=>{
   quietUntil=Date.now()+900000;
   let up=f;
   if(f.size>TARGET){
-    let best=null,q=1;
-    for(let i=0;i<4;i++){      // check the real size after shrinking; if still over 10 MB, shrink again harder
-      const tag=i?" (try "+(i+1)+")":"";
-      try{
-        progress(0,"Shrinking video… 0%"+tag);
-        const r=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"+tag),q,[720,540,432,360][i]);
-        if(!best||r.size<best.size)best=r;
-        if(r.size<=TARGET)break;
-        q*=TARGET/r.size*0.85;
-      }catch(e){break}
-    }
-    if(best&&best.size<f.size)up=best;      // could not shrink at all: upload the original
+    try{progress(0,"Shrinking video… 0%");up=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"))}
+    catch(e){up=f}      // could not shrink: upload the original (it is under 50 MB)
   }
   progress(0);
   try{
