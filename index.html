@@ -256,13 +256,17 @@ async function compress(file,onP){
     await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=()=>no(new Error("decode"))});
     const dur=v.duration;
     if(!isFinite(dur)||dur<=0||!v.videoWidth)throw new Error("meta");
-    const sc=Math.min(1,720/Math.min(v.videoWidth,v.videoHeight));
+    const abr=64000;
+    const vbr=Math.max(120000,Math.min(6000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
+    // keep every frame (full fps); instead pick the resolution that fits the size budget (720 / 540 / 480 / 360 / 320 / 240)
+    const short=Math.min(v.videoWidth,v.videoHeight);
+    let side=240;
+    for(const r of [720,540,480,360,320]){const k=Math.min(1,r/short);if(v.videoWidth*k*v.videoHeight*k*30*0.07<=vbr){side=r;break}}
+    const sc=Math.min(1,side/short);
     const w=Math.max(2,Math.round(v.videoWidth*sc/2)*2), h=Math.max(2,Math.round(v.videoHeight*sc/2)*2);
     const cv=document.createElement("canvas");cv.width=w;cv.height=h;
     const cx=cv.getContext("2d");
-    const abr=64000;
-    const vbr=Math.max(250000,Math.min(4000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
-    const stream=cv.captureStream(30);
+    const stream=cv.captureStream();      // no fps limit: every drawn frame is recorded
     try{
       ac=new (window.AudioContext||window.webkitAudioContext)();
       const src=ac.createMediaElementSource(v), dst=ac.createMediaStreamDestination();
@@ -273,9 +277,11 @@ async function compress(file,onP){
     rec=new MediaRecorder(stream,Object.assign({videoBitsPerSecond:vbr,audioBitsPerSecond:abr},mime?{mimeType:mime}:{}));
     const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
     const stopped=new Promise(r=>{rec.onstop=r});
-    const draw=()=>{cx.drawImage(v,0,0,w,h);onP(Math.min(99,Math.round(v.currentTime/dur*100)));raf=requestAnimationFrame(draw)};
+    const hasRVFC="requestVideoFrameCallback" in v;
+    const draw=()=>{cx.drawImage(v,0,0,w,h);onP(Math.min(99,Math.round(v.currentTime/dur*100)));raf=hasRVFC?0:requestAnimationFrame(draw)};
+    const tick=()=>{draw();if(hasRVFC)v.requestVideoFrameCallback(tick)};      // one draw per real video frame
     try{await v.play()}catch(e){v.muted=true;await v.play()}
-    rec.start(500);draw();
+    rec.start(500);if(hasRVFC)v.requestVideoFrameCallback(tick);else draw();
     // wait for the end of the video; do not rely on the "ended" event alone (iOS can skip it)
     let stalled=false;
     await new Promise(res=>{
