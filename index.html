@@ -178,24 +178,16 @@ const io=new IntersectionObserver(es=>es.forEach(e=>{
       return;
     }
     v.muted=muted;s.classList.remove("paused");
-    if(s._left){s._left=false;restart(v)}      // coming back to a video: always start from the beginning
     v.play().catch(()=>{v.muted=true;v.play().catch(()=>{})});
     s._w=setTimeout(()=>{watched.add(s.dataset.id);store.set([...watched])},1500);
     // last video of the list: add the list again so scrolling never ends
     if(s.dataset.last&&!s.dataset.done&&known.size){s.dataset.done=1;round()}
   }else{
     clearTimeout(s._w);
-    if(v){v.pause();try{v.currentTime=0}catch(e){}if(v.getAttribute("src"))s._left=true}
+    if(v){v.pause();v.currentTime=0}
   }
 }),{threshold:.6});
 
-function restart(v){      // go to 0:00, and double-check after a moment (the phone sometimes ignores the first seek)
-  const go=()=>{
-    try{v.currentTime=0}catch(e){}
-    setTimeout(()=>{if(!v.paused&&v.currentTime>0.8){try{v.currentTime=0}catch(e){}}},350);
-  };
-  v.readyState>=1?go():v.addEventListener("loadedmetadata",go,{once:true});
-}
 function unlock(s,vid){      // first tap: start from the beginning, with sound
   unlocked=true;vid.currentTime=0;vid.muted=muted;s.classList.remove("paused");
   vid.play().catch(()=>{vid.muted=true;vid.play().catch(()=>{})});
