@@ -167,28 +167,11 @@ const progress=(p,label)=>{
 };
 const toast=(t,ms=2500)=>{toastEl.style.background="";toastEl.textContent=t;toastEl.classList.add("on");clearTimeout(toast.t);toast.t=setTimeout(()=>toastEl.classList.remove("on"),ms)};
 
-const loaded=new Set();      // slides whose video is loaded; phones can only keep a few videos alive
-function release(sec){
-  const v=sec.querySelector("video");
-  if(v&&v.getAttribute("src")){try{v.pause()}catch(e){}v.removeAttribute("src");v.load()}
-  loaded.delete(sec);
-}
-function trim(s){      // keep only this video and its neighbours loaded, free all the others
-  loaded.add(s);
-  [...loaded].forEach(x=>{if(x!==s&&x!==s.previousElementSibling&&x!==s.nextElementSibling)release(x)});
-}
-function prefetch(s){      // load the next video in advance (shows its first frame, no black screen when you swipe)
-  const n=s&&s.nextElementSibling;if(!n||!n.dataset.src)return;
-  const v=n.querySelector("video");if(!v||v.src)return;
-  loaded.add(n);v.preload="auto";v.src=n.dataset.src;
-  v.addEventListener("loadedmetadata",()=>{try{v.currentTime=0.01}catch(e){}},{once:true});
-}
 const io=new IntersectionObserver(es=>es.forEach(e=>{
   const s=e.target,v=s.querySelector("video");
   if(e.isIntersecting){
     cur=s;
     if(!v.src)v.src=s.dataset.src;
-    setTimeout(()=>{prefetch(s);trim(s)},250);      // after the list has been extended at the end
     if(!unlocked){   // opens paused: iPhone only plays sound after a tap
       v.preload="auto";v.muted=false;s.classList.add("paused");
       v.addEventListener("loadedmetadata",()=>{try{v.currentTime=0.1}catch(e){}},{once:true});
