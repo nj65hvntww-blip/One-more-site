@@ -109,6 +109,19 @@ const api={
     if(!r.ok||!(r.headers.get("content-type")||"").includes("json"))throw new Error("no server");
     return r.json();
   },
+  async oldest(){      // oldest video in storage (null if none)
+    if(!remote)return null;
+    const r=await fetch(`${CFG.url}/storage/v1/object/list/${CFG.bucket}`,{method:"POST",
+      headers:{...H,"Content-Type":"application/json"},
+      body:JSON.stringify({prefix:"",limit:1,sortBy:{column:"created_at",order:"asc"}})});
+    if(!r.ok)return null;
+    const a=(await r.json()).filter(o=>o.name&&o.id);
+    return a.length?a[0].name:null;
+  },
+  async remove(name){
+    const r=await fetch(`${CFG.url}/storage/v1/object/${CFG.bucket}/${encodeURIComponent(name)}`,{method:"DELETE",headers:H});
+    return r.ok;
+  },
   upload(file,onProgress,title){
     const ext=(file.name.split(".").pop()||"mp4").toLowerCase().replace(/[^a-z0-9]/g,"")||"mp4";
     const id=Date.now()+"-"+Math.random().toString(36).slice(2,8)+(title&&remote?"!"+enc(title):"")+"."+ext;
@@ -122,7 +135,11 @@ const api={
       x.setRequestHeader("Content-Type",file.type||"video/mp4");
       x.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.min(99,Math.round(e.loaded/e.total*100)))};
       x.onload=()=>{
-        if(x.status<200||x.status>=300)return rej(new Error("upload failed"));
+        if(x.status<200||x.status>=300){
+          const er=new Error("upload failed");
+          er.full=remote&&(x.status===413||x.status===507||x.status===402||/quota|storage|exceed|full|limit|too large|size/i.test(x.responseText||""));   // storage full
+          return rej(er);
+        }
         onProgress(100);
         let rid=id;if(!remote){try{rid=JSON.parse(x.responseText).id}catch(e){}}
         res(rid);
@@ -196,7 +213,16 @@ function showMsg(icon,title,text){
   feed.innerHTML=`<section class="s msg"><div style="font-size:54px">${icon}</div><h2>${title}</h2><p>${text}</p></section>`;
 }
 const showEmpty=()=>showMsg("🎬","No videos yet","Tap + to upload the first one.");
+function dropSlides(id){
+  feed.querySelectorAll('[data-id="'+id+'"]').forEach(e=>{
+    if(e.dataset.last&&e.previousElementSibling&&!e.previousElementSibling.classList.contains("msg")){
+      e.previousElementSibling.dataset.last=1;if(e.dataset.done)e.previousElementSibling.dataset.done=1}
+    if(e===cur)cur=null;io.unobserve(e);e.remove()});
+  known.delete(id);
+}
 function sync(list){
+  const ids=new Set(list.map(v=>v.id));
+  [...known.keys()].filter(k=>!ids.has(k)).forEach(dropSlides);      // videos deleted (storage was full)
   const fresh=list.filter(v=>!known.has(v.id)).reverse();
   fresh.forEach(v=>{ const old=[...known]; known.clear(); known.set(v.id,v); old.forEach(([k,x])=>known.set(k,x));
     if(feed.querySelector(".msg")){feed.innerHTML="";return}
@@ -235,75 +261,7 @@ function setMuted(m){
 snd.onclick=()=>setMuted(!muted);
 document.getElementById("dots").onclick=()=>menuEl.classList.toggle("open");
 
-/* ===== Shrink video on the phone before upload: pick up to 45 MB, upload about 10 MB ===== */
-const MAX_IN=45*1024*1024, TARGET=10*1024*1024;
-function pickMime(){
-  if(!window.MediaRecorder)return "";
-  return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2","video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"]
-    .find(t=>MediaRecorder.isTypeSupported(t))||"";
-}
-async function compress(file,onP){
-  if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream)throw new Error("unsupported");
-  const url=URL.createObjectURL(file);
-  const v=document.createElement("video");
-  v.playsInline=true;v.setAttribute("playsinline","");v.preload="auto";
-  v.style.cssText="position:fixed;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none";
-  document.body.appendChild(v);
-  let ac=null,raf=0,rec=null;
-  const cleanup=()=>{cancelAnimationFrame(raf);try{v.pause()}catch(e){}v.remove();URL.revokeObjectURL(url);try{ac&&ac.close()}catch(e){}};
-  try{
-    v.src=url;
-    await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=()=>no(new Error("decode"))});
-    const dur=v.duration;
-    if(!isFinite(dur)||dur<=0||!v.videoWidth)throw new Error("meta");
-    const abr=64000;
-    const vbr=Math.max(120000,Math.min(6000000,Math.floor(TARGET*8*0.85/dur-abr)));   // aim for about 10 MB total
-    // keep every frame (full fps); instead pick the resolution that fits the size budget (720 / 540 / 480 / 360 / 320 / 240)
-    const short=Math.min(v.videoWidth,v.videoHeight);
-    let side=240;
-    for(const r of [720,540,480,360,320]){const k=Math.min(1,r/short);if(v.videoWidth*k*v.videoHeight*k*60*0.07<=vbr){side=r;break}}
-    const sc=Math.min(1,side/short);
-    const w=Math.max(2,Math.round(v.videoWidth*sc/2)*2), h=Math.max(2,Math.round(v.videoHeight*sc/2)*2);
-    const cv=document.createElement("canvas");cv.width=w;cv.height=h;
-    const cx=cv.getContext("2d");
-    const stream=cv.captureStream(60);      // up to 60 fps, no frames thrown away
-    try{
-      ac=new (window.AudioContext||window.webkitAudioContext)();
-      const src=ac.createMediaElementSource(v), dst=ac.createMediaStreamDestination();
-      src.connect(dst);dst.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
-      if(ac.state==="suspended")ac.resume();
-    }catch(e){}
-    const mime=pickMime();
-    rec=new MediaRecorder(stream,Object.assign({videoBitsPerSecond:vbr,audioBitsPerSecond:abr},mime?{mimeType:mime}:{}));
-    const chunks=[];rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-    const stopped=new Promise(r=>{rec.onstop=r});
-    const draw=()=>{cx.drawImage(v,0,0,w,h);onP(Math.min(99,Math.round(v.currentTime/dur*100)));raf=requestAnimationFrame(draw)};   // steady screen-rate drawing = smooth, no lag
-    try{await v.play()}catch(e){v.muted=true;await v.play()}
-    rec.start(500);draw();
-    // wait for the end of the video; do not rely on the "ended" event alone (iOS can skip it)
-    let stalled=false;
-    await new Promise(res=>{
-      let last=-1,lastT=Date.now();
-      const iv=setInterval(()=>{
-        const t=v.currentTime;
-        if(v.ended||t>=dur-0.2){clearInterval(iv);res();return}
-        if(v.paused)v.play().catch(()=>{});
-        if(t!==last){last=t;lastT=Date.now()}
-        else if(Date.now()-lastT>8000){clearInterval(iv);if(t<dur-1.5)stalled=true;res()}
-      },250);
-      v.onended=()=>{clearInterval(iv);res()};
-    });
-    if(stalled)throw new Error("stalled");
-    cancelAnimationFrame(raf);
-    try{rec.requestData()}catch(e){}
-    if(rec.state!=="inactive")rec.stop();
-    await Promise.race([stopped,new Promise(r=>setTimeout(r,4000))]);   // never wait forever for the recorder
-    const type=(rec.mimeType||mime||"video/mp4").split(";")[0];
-    const blob=new Blob(chunks,{type});
-    if(!blob.size||blob.size>=file.size)return file;       // not smaller: keep original
-    return new File([blob],"v."+(type.includes("mp4")?"mp4":"webm"),{type});
-  }finally{cleanup()}
-}
+const MAX_SIZE=50*1024*1024;      // videos must be smaller than 50 MB
 
 function askName(){
   return new Promise(res=>{
@@ -320,17 +278,22 @@ const fileIn=document.getElementById("file");
 document.getElementById("add").onclick=()=>{menuEl.classList.remove("open");fileIn.click()};
 fileIn.onchange=async()=>{
   const f=fileIn.files[0];fileIn.value="";if(!f)return;
-  if(f.size>MAX_IN){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is 45 MB.",4000);return}
+  if(f.size>=MAX_SIZE){toast("Too big: "+Math.round(f.size/1048576)+" MB. Max is under 50 MB.",4000);return}
   const title=await askName();if(title===null)return;
   quietUntil=Date.now()+900000;
-  let up=f;
-  if(f.size>TARGET){
-    try{progress(0,"Shrinking video… 0%");up=await compress(f,p=>progress(p,"Shrinking video… "+p+"%"))}
-    catch(e){up=f}      // could not shrink: upload the original (it is under 50 MB)
-  }
   progress(0);
   try{
-    const id=await api.upload(up,progress,title);
+    let id,lastTry=null;
+    for(;;){      // storage full: delete the oldest video and try again, until the video loads
+      try{id=await api.upload(f,progress,title);break}
+      catch(e){
+        if(!e.full)throw e;
+        progress(0,"Storage full… deleting oldest video");
+        const old=await api.oldest();
+        if(!old||old===lastTry||!(await api.remove(old)))throw e;
+        lastTry=old;dropSlides(old);
+      }
+    }
     progress(100,"Processing…");
     watched.add(id);
     if(!ready){ready=true}
@@ -339,7 +302,7 @@ fileIn.onchange=async()=>{
     if(s)s.scrollIntoView({behavior:"smooth"});
     quietUntil=Date.now()+3000;
     toast("Uploaded 100/100% ✓");
-  }catch(e){quietUntil=0;toast("Upload failed. Check connection / file size (max 50 MB on free Supabase).")}
+  }catch(e){quietUntil=0;toast("Upload failed. Check connection / file size (max under 50 MB).")}
 };
 </script>
 </body>
